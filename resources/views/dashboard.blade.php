@@ -460,7 +460,7 @@
             font-size: 14px;
             z-index: 1001;
             display: none;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
         }
 
         .toast.show {
@@ -473,6 +473,7 @@
                 transform: translateX(-50%) translateY(20px);
                 opacity: 0;
             }
+
             to {
                 transform: translateX(-50%) translateY(0);
                 opacity: 1;
@@ -594,7 +595,7 @@
         // Configuration
         const POLLING_INTERVAL = 1000; // 1 second
         const API_BASE = '';
-        
+
         // Firebase Configuration - GANTI DENGAN CONFIG ANDA
         const firebaseConfig = {
             apiKey: "YOUR_API_KEY",
@@ -650,15 +651,15 @@
             try {
                 firebase.initializeApp(firebaseConfig);
                 messaging = firebase.messaging();
-                
+
                 // Handle foreground messages
                 messaging.onMessage((payload) => {
                     console.log('Message received:', payload);
                     showToast(payload.notification.body);
-                    
+
                     // Play alert sound
                     playAlertSound();
-                    
+
                     // Show browser notification
                     if (Notification.permission === 'granted') {
                         new Notification(payload.notification.title, {
@@ -681,13 +682,13 @@
             }
 
             const permission = await Notification.requestPermission();
-            
+
             if (permission === 'granted') {
                 notificationEnabled = true;
                 notifBtn.classList.add('notif-active');
                 notifBanner.classList.remove('show');
                 showToast('✅ Notifikasi diaktifkan!');
-                
+
                 // Get FCM Token if Firebase is configured
                 if (messaging) {
                     try {
@@ -699,7 +700,7 @@
                         console.log('FCM Token error:', error);
                     }
                 }
-                
+
                 // Test notification
                 new Notification('Gas Monitor', {
                     body: 'Notifikasi aktif! Anda akan menerima peringatan saat ada kebocoran gas.',
@@ -729,7 +730,7 @@
         // Play Alert Sound
         function playAlertSound() {
             const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2teleQcmgbqsm4B7Yn+dlaSfkHNfXXGSpamjlIMzAA==');
-            audio.play().catch(() => {});
+            audio.play().catch(() => { });
         }
 
         // Initialize Chart
@@ -776,7 +777,7 @@
         function updateGauge(value) {
             gasValue.textContent = value;
 
-            // Calculate stroke offset (0-100% maps to 251.2-0)
+            // Calculate stroke offset (0% = full offset/hidden, 100% = no offset/full)
             const offset = 251.2 - (value / 100 * 251.2);
             gaugeFill.style.strokeDashoffset = offset;
 

@@ -1,64 +1,74 @@
 /*
- * ESP32 Gas Monitor - PWA Version
- * Pengganti Blynk dengan HTTP ke Laravel Server
+ * ESP32 Gas Monitor - WiFi Online Version
  * 
- * PENTING: Ganti SERVER_IP dengan IP laptop Anda
- * Cek dengan: ipconfig di CMD
+ * Koneksi ke server HOSTING (gas-monitor.site)
+ * Bisa diakses dari HP mana saja via PWA
+ * 
+ * Hardware:
+ * - ESP32 Dev Module
+ * - Sensor TGS2610
+ * - Motor Servo, Solenoid Valve, Buzzer, Relay
  */
 
+// ============== LIBRARY ==============
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>  // Untuk HTTPS
 #include <ArduinoJson.h>
 #include <ESP32Servo.h>
 
-// ============== KONFIGURASI ==============
-// Ganti dengan IP server Laravel Anda
-const char* SERVER_IP = "172.20.10.8";      // IP Laptop Anda (Update: 172.20.10.8)
-const int SERVER_PORT = 8000;               // Port default Laragon
+// ============== KONFIGURASI SERVER ==============
+const char* SERVER_HOST = "gas-monitor.site";  // Domain hosting Anda
+const int SERVER_PORT = 80;                     // Port HTTP
 
-// WiFi credentials (update sesuai yg dipakai laptop skrg)
-const char* ssid = "iki";
-const char* pass = "12345670";
+// ============== KONFIGURASI WiFi ==============
+// GANTI dengan WiFi Anda!
+const char* ssid = "NAMA_WIFI_ANDA";      // Contoh: "Rumah_WiFi"
+const char* pass = "PASSWORD_WIFI_ANDA";  // Contoh: "password123"
 
-// ============== PIN DEFINITIONS ==============
-const int sensorGas = 36;   // GPIO36 - Analog input sensor TGS2610
+// ============== PIN SENSOR & AKTUATOR ==============
+const int sensorGas = 36;   // GPIO36 - Sensor TGS2610
 const int servoPin = 23;    // GPIO23 - Motor Servo
 const int pinBuzz = 15;     // GPIO15 - Buzzer
-const int pinRelay = 2;     // GPIO2  - Relay (Exhaust Fan)
-const int pinValve = 22;    // GPIO22 - SSR (Solenoid Valve)
+const int pinRelay = 2;     // GPIO2  - Relay (Fan)
+const int pinValve = 22;    // GPIO22 - SSR (Valve)
 
 // ============== CONSTANTS ==============
 #define REF_VOLTAGE    3.3
 #define ADC_RESOLUTION 4096.0
 #define SERVO_TUTUP    0
 #define SERVO_BUKA     180
-#define GAS_THRESHOLD  2.0    // Voltage threshold untuk deteksi gas
+#define GAS_THRESHOLD  2.0
 
 // ============== OBJECTS ==============
 Servo servo1;
-HTTPClient http;
 
 // ============== VARIABLES ==============
+bool isConnected = false;
 bool statusNotif = false;
-bool modeAuto = true;       // Default: Auto mode
-bool valveOn = true;        // Default: Valve ON (gas bisa mengalir)
+bool modeAuto = true;
+bool valveOn = true;
 unsigned long lastSend = 0;
 unsigned long lastCommandCheck = 0;
+unsigned long lastReconnect = 0;
 
 // ============== FUNCTION PROTOTYPES ==============
-void connectWiFi();
-void sendDataToServer(int gasPercent, float voltage, bool alert);
+bool connectWiFi();
+bool sendDataToServer(int gasPercent, float voltage, bool alert);
 void checkServerCommands();
 void executeCommand(String command);
+void acknowledgeCommand(int commandId);
 void setValve(bool on);
 void buzzfanOn();
 void buzzfanOff();
-void acknowledgeCommand(int commandId);
 
 // ============== SETUP ==============
 void setup() {
     Serial.begin(115200);
-    Serial.println("\n=== Gas Monitor PWA Version ===");
+    Serial.println("\n=====================================");
+    Serial.println("Gas Monitor - WiFi Online Version");
+    Serial.println("Server: gas-monitor.site");
+    Serial.println("=====================================");
     
     // Pin modes
     pinMode(pinBuzz, OUTPUT);
@@ -66,15 +76,15 @@ void setup() {
     pinMode(pinValve, OUTPUT);
     
     // Default states (aman)
-    digitalWrite(pinBuzz, LOW);    // Buzzer OFF (Silent) - Fix: Active High
+    digitalWrite(pinBuzz, LOW);    // Buzzer OFF (Silent)
     digitalWrite(pinRelay, LOW);   // Fan OFF
-    digitalWrite(pinValve, HIGH);  // Valve TUTUP (gas tidak mengalir saat bahaya)
+    digitalWrite(pinValve, HIGH);  // Valve TUTUP
     
     // Servo setup
     servo1.attach(servoPin);
     servo1.write(SERVO_TUTUP);
     
-    // Connect WiFi
+    // Konek ke WiFi
     connectWiFi();
     
     Serial.println("Setup complete!");
@@ -82,9 +92,10 @@ void setup() {
 
 // ============== MAIN LOOP ==============
 void loop() {
-    // Pastikan WiFi terhubung
-    if (WiFi.status() != WL_CONNECTED) {
+    // Cek koneksi WiFi setiap 30 detik
+    if (!isConnected && millis() - lastReconnect >= 30000) {
         connectWiFi();
+        lastReconnect = millis();
     }
     
     // Baca sensor gas
@@ -96,36 +107,28 @@ void loop() {
     Serial.print(persen);
     Serial.print("% | Voltage: ");
     Serial.print(voltage_adc);
-    Serial.print("V | Mode: ");
-    Serial.println(modeAuto ? "AUTO" : "MANUAL");
+    Serial.print("V | WiFi: ");
+    Serial.println(isConnected ? "Connected" : "Disconnected");
     
     // Deteksi kebocoran gas
     bool isAlert = voltage_adc > GAS_THRESHOLD;
     
     if (isAlert) {
-        // Ada kebocoran gas!
         buzzfanOn();
-        
         if (modeAuto) {
-            // Mode Auto: Otomatis tutup valve dan buka regulator
-            digitalWrite(pinValve, LOW);    // Valve BUKA (matikan gas)
-            // servo1.write(SERVO_BUKA);    // Fix: Servo tidak bergerak di mode auto
+            digitalWrite(pinValve, LOW);
+            // servo1.write(SERVO_BUKA);  // Servo tidak bergerak di auto mode
             valveOn = false;
         }
-        
         if (!statusNotif) {
             Serial.println("!!! KEBOCORAN GAS TERDETEKSI !!!");
         }
         statusNotif = true;
-        
     } else {
-        // Aman, tidak ada gas
         buzzfanOff();
-        
         if (modeAuto) {
-            // Mode Auto: Valve tetap ON (gas bisa mengalir)
-            digitalWrite(pinValve, HIGH);   // Valve TUTUP (gas mengalir normal)
-            // servo1.write(SERVO_TUTUP);   // Fix: Servo tidak bergerak di mode auto
+            digitalWrite(pinValve, HIGH);
+            // servo1.write(SERVO_TUTUP);  // Servo tidak bergerak di auto mode
             valveOn = true;
         }
         statusNotif = false;
@@ -133,60 +136,83 @@ void loop() {
     
     // Kirim data ke server setiap 1 detik
     if (millis() - lastSend >= 1000) {
-        sendDataToServer(persen, voltage_adc, isAlert);
+        if (isConnected) {
+            sendDataToServer(persen, voltage_adc, isAlert);
+        }
         lastSend = millis();
     }
     
     // Cek command dari server setiap 1 detik
     if (millis() - lastCommandCheck >= 1000) {
-        checkServerCommands();
+        if (isConnected) {
+            checkServerCommands();
+        }
         lastCommandCheck = millis();
     }
     
-    delay(100);  // Small delay untuk stabilitas
+    delay(100);
 }
 
-// ============== WIFI CONNECTION ==============
-void connectWiFi() {
-    Serial.print("Connecting to WiFi: ");
+// ============== CONNECT WiFi ==============
+bool connectWiFi() {
+    Serial.println("\n--- Connecting to WiFi ---");
+    Serial.print("SSID: ");
     Serial.println(ssid);
     
     WiFi.begin(ssid, pass);
     
     int attempts = 0;
+    Serial.print("Connecting");
     while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-        delay(500);
+        delay(1000);
         Serial.print(".");
         attempts++;
     }
     
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("\nWiFi Connected!");
+        Serial.println("\n✓ WiFi Connected!");
         Serial.print("IP Address: ");
         Serial.println(WiFi.localIP());
+        Serial.print("Signal Strength: ");
+        Serial.print(WiFi.RSSI());
+        Serial.println(" dBm");
+        isConnected = true;
+        return true;
     } else {
-        Serial.println("\nWiFi Connection Failed!");
+        Serial.println("\n✗ WiFi Connection Failed!");
+        isConnected = false;
+        return false;
     }
 }
 
 // ============== SEND DATA TO SERVER ==============
-void sendDataToServer(int gasPercent, float voltage, bool alert) {
-    if (WiFi.status() != WL_CONNECTED) return;
+bool sendDataToServer(int gasPercent, float voltage, bool alert) {
+    if (WiFi.status() != WL_CONNECTED) {
+        isConnected = false;
+        return false;
+    }
     
-    String url = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT) + "/api/device/data";
+    WiFiClientSecure client;
+    client.setInsecure();  // Skip SSL certificate verification (untuk hosting)
     
-    // Create JSON payload
+    HTTPClient http;
+    
+    // Buat URL lengkap dengan HTTPS
+    String url = "https://" + String(SERVER_HOST) + "/api/device/data";
+    
+    // Buat JSON payload
     StaticJsonDocument<200> doc;
     doc["gas"] = gasPercent;
     doc["voltage"] = voltage;
     doc["alert"] = alert;
+    doc["connection"] = "wifi";
     
     String payload;
     serializeJson(doc, payload);
     
-    http.begin(url);
+    // Kirim HTTP POST
+    http.begin(client, url);  // Pakai secure client
     http.addHeader("Content-Type", "application/json");
-    http.addHeader("Accept", "application/json");
     
     int httpCode = http.POST(payload);
     
@@ -194,55 +220,63 @@ void sendDataToServer(int gasPercent, float voltage, bool alert) {
         if (httpCode == HTTP_CODE_OK) {
             String response = http.getString();
             
-            // Parse response to get current mode
+            // Parse response untuk update mode
             StaticJsonDocument<200> resDoc;
             DeserializationError error = deserializeJson(resDoc, response);
-            
             if (!error) {
                 String serverMode = resDoc["mode"].as<String>();
                 modeAuto = (serverMode == "auto");
             }
+            
+            Serial.println("✓ Data sent successfully");
+        } else {
+            Serial.print("✗ HTTP Response: ");
+            Serial.print(httpCode);
+            Serial.print(" - ");
+            Serial.println(http.getString());
         }
+        http.end();
+        return true;
     } else {
-        Serial.print("HTTP Error: ");
-        Serial.println(http.errorToString(httpCode));
+        Serial.print("✗ HTTP Error: ");
+        Serial.println(httpCode);
+        http.end();
+        return false;
     }
-    
-    http.end();
 }
 
 // ============== CHECK SERVER COMMANDS ==============
 void checkServerCommands() {
-    if (WiFi.status() != WL_CONNECTED) return;
+    if (WiFi.status() != WL_CONNECTED) {
+        isConnected = false;
+        return;
+    }
     
-    String url = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT) + "/api/device/commands";
+    WiFiClientSecure client;
+    client.setInsecure();
     
-    http.begin(url);
-    http.addHeader("Accept", "application/json");
+    HTTPClient http;
+    String url = "https://" + String(SERVER_HOST) + "/api/device/commands";
     
+    http.begin(client, url);
     int httpCode = http.GET();
     
     if (httpCode == HTTP_CODE_OK) {
         String response = http.getString();
         
-        // Parse JSON response
         StaticJsonDocument<512> doc;
         DeserializationError error = deserializeJson(doc, response);
         
         if (!error) {
             JsonArray commands = doc["commands"].as<JsonArray>();
-            
             for (JsonObject cmd : commands) {
                 int cmdId = cmd["id"];
                 String command = cmd["command"].as<String>();
                 
-                Serial.print("Executing command: ");
+                Serial.print("Command received: ");
                 Serial.println(command);
                 
-                // Execute command
                 executeCommand(command);
-                
-                // Acknowledge command
                 acknowledgeCommand(cmdId);
             }
         }
@@ -255,31 +289,34 @@ void checkServerCommands() {
 void executeCommand(String command) {
     if (command == "mode_auto") {
         modeAuto = true;
-        Serial.println("Mode changed to AUTO");
-        
+        Serial.println("Mode: AUTO");
     } else if (command == "mode_manual") {
         modeAuto = false;
-        Serial.println("Mode changed to MANUAL");
-        
+        Serial.println("Mode: MANUAL");
     } else if (command == "valve_on") {
-        if (!modeAuto) {  // Hanya bisa di mode manual
+        if (!modeAuto) {
             setValve(true);
-            Serial.println("Valve turned ON");
+            Serial.println("Valve: ON");
         }
-        
     } else if (command == "valve_off") {
-        if (!modeAuto) {  // Hanya bisa di mode manual
+        if (!modeAuto) {
             setValve(false);
-            Serial.println("Valve turned OFF");
+            Serial.println("Valve: OFF");
         }
     }
 }
 
 // ============== ACKNOWLEDGE COMMAND ==============
 void acknowledgeCommand(int commandId) {
-    if (WiFi.status() != WL_CONNECTED) return;
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
     
-    String url = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT) + "/api/device/command-ack";
+    WiFiClientSecure client;
+    client.setInsecure();
+    
+    HTTPClient http;
+    String url = "https://" + String(SERVER_HOST) + "/api/device/command-ack";
     
     StaticJsonDocument<100> doc;
     doc["command_id"] = commandId;
@@ -287,9 +324,8 @@ void acknowledgeCommand(int commandId) {
     String payload;
     serializeJson(doc, payload);
     
-    http.begin(url);
+    http.begin(client, url);
     http.addHeader("Content-Type", "application/json");
-    
     http.POST(payload);
     http.end();
 }
@@ -298,21 +334,21 @@ void acknowledgeCommand(int commandId) {
 void setValve(bool on) {
     valveOn = on;
     if (on) {
-        digitalWrite(pinValve, HIGH);   // Valve TUTUP (gas mengalir normal)
+        digitalWrite(pinValve, HIGH);
         servo1.write(SERVO_TUTUP);
     } else {
-        digitalWrite(pinValve, LOW);    // Valve BUKA (gas diputus)
+        digitalWrite(pinValve, LOW);
         servo1.write(SERVO_BUKA);
     }
 }
 
-// ============== BUZZER & FAN CONTROL ==============
+// ============== BUZZER & FAN ==============
 void buzzfanOff() {
-    digitalWrite(pinBuzz, LOW);   // Buzzer OFF (Silent) - Fix: Active High
-    digitalWrite(pinRelay, LOW);  // Fan OFF
+    digitalWrite(pinBuzz, LOW);    // Buzzer OFF (Silent)
+    digitalWrite(pinRelay, LOW);   // Fan OFF
 }
 
 void buzzfanOn() {
-    digitalWrite(pinBuzz, HIGH);   // Buzzer ON (Beep) - Fix: Active High
+    digitalWrite(pinBuzz, HIGH);   // Buzzer ON (Beep)
     digitalWrite(pinRelay, HIGH);  // Fan ON
 }

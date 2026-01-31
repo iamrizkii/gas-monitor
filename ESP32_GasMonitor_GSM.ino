@@ -22,11 +22,11 @@
 
 // ============== KONFIGURASI SERVER ==============
 // GANTI dengan URL hosting Anda!
-const char* SERVER_HOST = "your-domain.hostinger.com";  // Domain hosting (tanpa https://)
-const int SERVER_PORT = 80;                              // Port HTTP
+const char* SERVER_HOST = "gas-monitor.site";  // Domain hosting
+const int SERVER_PORT = 80;                     // Port HTTP standard
 
-// ============== KONFIGURASI GSM (Indosat) ==============
-const char* APN = "indosatgprs";      // APN Indosat
+// ============== KONFIGURASI GSM (Tri / 3) ==============
+const char* APN = "3gprs";             // APN untuk Kartu 3 (Tri)
 const char* GSM_USER = "";             // Kosongkan
 const char* GSM_PASS = "";             // Kosongkan
 
@@ -87,7 +87,7 @@ void setup() {
     pinMode(pinValve, OUTPUT);
     
     // Default states (aman)
-    digitalWrite(pinBuzz, HIGH);   // Buzzer OFF
+    digitalWrite(pinBuzz, LOW);    // Buzzer OFF (Silent)
     digitalWrite(pinRelay, LOW);   // Fan OFF
     digitalWrite(pinValve, HIGH);  // Valve TUTUP
     
@@ -95,8 +95,8 @@ void setup() {
     servo1.attach(servoPin);
     servo1.write(SERVO_TUTUP);
     
-    // Inisialisasi SIM800L Serial
-    SerialGSM.begin(9600, SERIAL_8N1, SIM800L_RX, SIM800L_TX);
+    // Inisialisasi SIM800L Serial (trying 115200 baud)
+    SerialGSM.begin(115200, SERIAL_8N1, SIM800L_RX, SIM800L_TX);
     delay(3000);  // Tunggu SIM800L boot
     
     // Konek ke GSM
@@ -132,7 +132,7 @@ void loop() {
         buzzfanOn();
         if (modeAuto) {
             digitalWrite(pinValve, LOW);
-            servo1.write(SERVO_BUKA);
+            // servo1.write(SERVO_BUKA);
             valveOn = false;
         }
         if (!statusNotif) {
@@ -143,7 +143,7 @@ void loop() {
         buzzfanOff();
         if (modeAuto) {
             digitalWrite(pinValve, HIGH);
-            servo1.write(SERVO_TUTUP);
+            // servo1.write(SERVO_TUTUP);
             valveOn = true;
         }
         statusNotif = false;
@@ -424,11 +424,11 @@ void setValve(bool on) {
 
 // ============== BUZZER & FAN ==============
 void buzzfanOff() {
-    digitalWrite(pinBuzz, HIGH);
+    digitalWrite(pinBuzz, LOW);
     digitalWrite(pinRelay, LOW);
 }
 
 void buzzfanOn() {
-    digitalWrite(pinBuzz, LOW);
+    digitalWrite(pinBuzz, HIGH);
     digitalWrite(pinRelay, HIGH);
 }
